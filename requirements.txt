@@ -2,6 +2,6 @@ streamlit==1.42.0
 qrcode[pil]
 PyJWT
 streamlit-qrcode-scanner
-streamlit-geolocation
+
 streamlit-autorefresh
 pandas
