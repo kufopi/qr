@@ -1,7 +1,6 @@
-streamlit==1.42.0
+streamlit==1.56.0
 qrcode[pil]
 PyJWT
 streamlit-qrcode-scanner==0.1.2
-
 streamlit-autorefresh
 pandas

@@ -1,10 +1,3 @@
-import asyncio, sys
-if sys.version_info >= (3, 10):
-    try:
-        asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
 import streamlit as st
 from database import init_db
 import pages.lecturer as lecturer_page
