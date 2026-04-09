@@ -4,65 +4,36 @@ from utils import verify_qr_token
 from database import get_connection
 from datetime import datetime
 import streamlit.components.v1 as components
-import json
 
 
 def show():
     st.title("📱 Student Attendance Scanner")
 
-    # ── Location via JS → hidden text input bridge ──
+    # ── Location display (JS only, no Python parsing) ──
     st.subheader("📍 Your Location")
-
-    # JS injects coordinates into a hidden Streamlit text input
     components.html("""
+        <div id="status" style="font-family:sans-serif; font-size:15px; padding:6px;">
+            ⏳ Requesting location...
+        </div>
         <script>
-        function sendLocation() {
-            if (!navigator.geolocation) {
-                setInput("ERROR: Geolocation not supported");
-                return;
-            }
+        if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 function(pos) {
-                    const val = pos.coords.latitude + "," + pos.coords.longitude + "," + pos.coords.accuracy;
-                    // Find the hidden text input in the parent frame and set its value
-                    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-                    for (let inp of inputs) {
-                        if (inp.getAttribute("aria-label") === "location_bridge") {
-                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                                window.HTMLInputElement.prototype, 'value').set;
-                            nativeInputValueSetter.call(inp, val);
-                            inp.dispatchEvent(new Event('input', { bubbles: true }));
-                            break;
-                        }
-                    }
+                    document.getElementById("status").innerHTML =
+                        "✅ Lat: <b>" + pos.coords.latitude.toFixed(6) + "</b> | " +
+                        "Lon: <b>" + pos.coords.longitude.toFixed(6) + "</b> | " +
+                        "Accuracy: <b>" + pos.coords.accuracy.toFixed(0) + "m</b>";
                 },
-                function(err) { console.log("Geo error:", err.message); },
+                function(err) {
+                    document.getElementById("status").innerText = "❌ " + err.message;
+                },
                 { enableHighAccuracy: true, timeout: 15000 }
             );
+        } else {
+            document.getElementById("status").innerText = "❌ Geolocation not supported.";
         }
-        sendLocation();
         </script>
-    """, height=0)
-
-    # Hidden bridge input — JS writes into this, Python reads it
-    raw = st.text_input("location_bridge", label_visibility="collapsed", key="location_bridge")
-
-    if raw and "," in raw and not raw.startswith("ERROR"):
-        parts = raw.split(",")
-        try:
-            lat = float(parts[0])
-            lon = float(parts[1])
-            accuracy = float(parts[2])
-            st.success(f"✅ Location acquired!")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Latitude", f"{lat:.6f}")
-            col2.metric("Longitude", f"{lon:.6f}")
-            col3.metric("Accuracy", f"{accuracy:.0f}m")
-            st.map({"lat": [lat], "lon": [lon]})
-        except ValueError:
-            st.warning("⏳ Waiting for location...")
-    else:
-        st.warning("⏳ Waiting for location... Allow browser location permission.")
+    """, height=40)
 
     st.divider()
 
