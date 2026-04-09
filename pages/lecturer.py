@@ -6,6 +6,7 @@ from utils import create_qr_token
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 from datetime import datetime
+import streamlit.components.v1 as components
 
 
 def show():
@@ -14,17 +15,73 @@ def show():
     tab1, tab2, tab3 = st.tabs(["▶️ Live Session", "📊 Session Report", "📅 Semester Report"])
 
     # ──────────────────────────────────────────────
-    # TAB 1 — Live Session (your existing code)
+    # TAB 1 — Live Session
     # ──────────────────────────────────────────────
     with tab1:
         course = st.selectbox("Select Course", ["CSC101"], key="course_select")
+        radius = st.slider(
+            "📏 Geofence Radius (meters)", min_value=20, max_value=200, value=50, step=10,
+            help="Max distance a student can be from your location to mark attendance"
+        )
 
-        if st.button("🚀 Start New Attendance Session", type="primary"):
+        # ── Capture lecturer's live location via JS ──
+        st.subheader("📍 Your (Classroom) Location")
+        components.html("""
+            <div id="loc" style="font-family:sans-serif; font-size:14px; padding:4px;">
+                ⏳ Detecting your location...
+            </div>
+            <script>
+            navigator.geolocation.getCurrentPosition(
+                function(pos) {
+                    const lat = pos.coords.latitude;
+                    const lon = pos.coords.longitude;
+                    const acc = pos.coords.accuracy;
+                    document.getElementById("loc").innerHTML =
+                        "✅ Lat: <b>" + lat.toFixed(6) + "</b> | Lon: <b>" + lon.toFixed(6) +
+                        "</b> | Accuracy: <b>" + acc.toFixed(0) + "m</b>";
+
+                    // Write into hidden bridge input
+                    const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                    for (let inp of inputs) {
+                        if (inp.getAttribute("aria-label") === "lecturer_loc_bridge") {
+                            const setter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value').set;
+                            setter.call(inp, lat + "," + lon + "," + acc);
+                            inp.dispatchEvent(new Event('input', { bubbles: true }));
+                            break;
+                        }
+                    }
+                },
+                function(err) {
+                    document.getElementById("loc").innerText = "❌ Location error: " + err.message;
+                },
+                { enableHighAccuracy: true, timeout: 15000 }
+            );
+            </script>
+        """, height=40)
+
+        loc_raw = st.text_input("lecturer_loc_bridge", label_visibility="collapsed", key="lecturer_loc_bridge")
+
+        # Parse location from bridge
+        class_lat, class_lon = None, None
+        if loc_raw and "," in loc_raw:
+            try:
+                parts = loc_raw.split(",")
+                class_lat = float(parts[0])
+                class_lon = float(parts[1])
+                st.success(f"📌 Classroom set to **({class_lat:.6f}, {class_lon:.6f})** | Radius: **{radius}m**")
+            except ValueError:
+                pass
+
+        if class_lat is None:
+            st.info("⏳ Waiting for your location before you can start a session...")
+
+        if st.button("🚀 Start New Attendance Session", type="primary", disabled=(class_lat is None)):
             conn = get_connection()
             c = conn.cursor()
             c.execute(
-                "INSERT INTO sessions (course_code, lecturer_id, start_time, lat, lon, radius) VALUES (?, 1, ?, 6.5244, 3.3792, 50)",
-                (course, st.session_state.username),
+                "INSERT INTO sessions (course_code, lecturer_id, start_time, lat, lon, radius) VALUES (?, 1, ?, ?, ?, ?)",
+                (course, datetime.now().isoformat(), class_lat, class_lon, radius),
             )
             session_id = c.lastrowid
             conn.commit()
@@ -96,13 +153,11 @@ def show():
 
             conn = get_connection()
 
-            # Get the course_code for this session
             session_info = pd.read_sql_query(
                 "SELECT course_code FROM sessions WHERE id=?", conn, params=(selected_id,)
             )
             session_course = session_info.iloc[0]["course_code"] if not session_info.empty else None
 
-            # Enrolled students for that course (with full name)
             all_students = pd.read_sql_query(
                 """SELECT u.username, u.full_name
                    FROM enrollments e
@@ -112,7 +167,6 @@ def show():
                 params=(session_course,),
             )
 
-            # Students who attended
             attended = pd.read_sql_query(
                 "SELECT student_username, timestamp FROM attendance WHERE session_id=?",
                 conn,
@@ -120,7 +174,6 @@ def show():
             )
             conn.close()
 
-            # Merge to get Present / Absent
             report = all_students.copy()
             report.columns = ["Username", "Student"]
             report["Status"] = report["Username"].apply(
@@ -131,7 +184,7 @@ def show():
             report = report[["Student", "Username", "Status", "Time Marked"]]
 
             present_count = (report["Status"] == "✅ Present").sum()
-            absent_count = (report["Status"] == "❌ Absent").sum()
+            absent_count  = (report["Status"] == "❌ Absent").sum()
             total = len(report)
 
             col1, col2, col3 = st.columns(3)
@@ -141,7 +194,6 @@ def show():
 
             st.dataframe(report, use_container_width=True)
 
-            # Download CSV
             csv = report.to_csv(index=False).encode()
             st.download_button(
                 "⬇️ Download Session Report (CSV)",
@@ -169,7 +221,6 @@ def show():
 
             conn = get_connection()
 
-            # All sessions for this course
             sessions = pd.read_sql_query(
                 "SELECT id, start_time FROM sessions WHERE course_code=?",
                 conn,
@@ -177,7 +228,6 @@ def show():
             )
             total_sessions = len(sessions)
 
-            # Enrolled students for this course (with full name)
             all_students_df = pd.read_sql_query(
                 """SELECT u.username, u.full_name
                    FROM enrollments e
@@ -188,14 +238,11 @@ def show():
             )
             all_students = all_students_df.to_dict("records")
 
-            # All attendance records for this course
             attendance_all = pd.read_sql_query(
-                """
-                SELECT a.student_username, a.session_id
-                FROM attendance a
-                JOIN sessions s ON a.session_id = s.id
-                WHERE s.course_code = ?
-                """,
+                """SELECT a.student_username, a.session_id
+                   FROM attendance a
+                   JOIN sessions s ON a.session_id = s.id
+                   WHERE s.course_code = ?""",
                 conn,
                 params=(selected_course,),
             )
@@ -204,25 +251,20 @@ def show():
             summary_rows = []
             for row in all_students:
                 student_username = row["username"]
-                student_name = row["full_name"]
-                attended_count = len(
-                    attendance_all[attendance_all["student_username"] == student_username]
-                )
+                student_name     = row["full_name"]
+                attended_count   = len(attendance_all[attendance_all["student_username"] == student_username])
                 pct = (attended_count / total_sessions * 100) if total_sessions > 0 else 0
-                summary_rows.append(
-                    {
-                        "Student": student_name,
-                        "Username": student_username,
-                        "Sessions Attended": attended_count,
-                        "Total Sessions": total_sessions,
-                        "Attendance %": round(pct, 1),
-                        "Status": "⚠️ At Risk" if pct < 75 else "✅ Good",
-                    }
-                )
+                summary_rows.append({
+                    "Student": student_name,
+                    "Username": student_username,
+                    "Sessions Attended": attended_count,
+                    "Total Sessions": total_sessions,
+                    "Attendance %": round(pct, 1),
+                    "Status": "⚠️ At Risk" if pct < 75 else "✅ Good",
+                })
 
             summary_df = pd.DataFrame(summary_rows).sort_values("Attendance %", ascending=False)
 
-            # Summary metrics
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Sessions", total_sessions)
             col2.metric("Total Students", len(all_students))
@@ -231,7 +273,6 @@ def show():
 
             st.dataframe(summary_df, use_container_width=True)
 
-            # Download semester CSV
             csv_sem = summary_df.to_csv(index=False).encode()
             st.download_button(
                 "⬇️ Download Semester Report (CSV)",
